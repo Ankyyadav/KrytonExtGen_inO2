@@ -35,8 +35,24 @@ dpl-config.json
 # Configs directory (runtime-generated ini snapshots)
 configs/
 
-# Working notes
+# Working notes and cross-check macros (not part of main workflow)
 investigation_log.md
+macros/plotBoxClusters.C
+macros/AliceOldData.C
+macros/checkClusters.C
+macros/checkDigits.C
+macros/compare_hits.C
+macros/compareScanHits.C
+macros/hit_pos_compare.C
+macros/kr_hit_spectrum.C
+macros/check_radius.C
+macros/check_radius2.C
+macros/check_radius3.C
+macros/check_vertex.C
+macros/compareDigits.C
+macros/drawHelper.C
+macros/plotClusters.C
+runTPCKrClFinderFromDigits.sh
 
 # Claude Code session memory
 .claude/
