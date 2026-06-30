@@ -1,0 +1,42 @@
+# ROOT binary output
+*.root
+*.pdf
+*.png
+
+# Compiled ROOT macros
+*.so
+*.dylib
+*.pcm
+*.d
+
+# Simulation and digitizer logs
+simlog
+serverlog
+mergerlog
+workerlog*
+log.digi
+log.clust
+*.log
+
+# Scan and run directories (data output)
+scan_*/
+RunData/
+local_o2_patches/
+plots/
+QAplots/
+root/
+
+# Backup and temporary files
+*.bak*
+*.bad
+*.tmp
+dpl-config.json
+
+# Configs directory (runtime-generated ini snapshots)
+configs/
+
+# Working notes
+investigation_log.md
+
+# Claude Code session memory
+.claude/
