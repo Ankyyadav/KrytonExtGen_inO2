@@ -147,23 +147,42 @@ if (detParam.UseGeant4Edep) {
 }
 ```
 
-**SetSpecialPhysicsCuts():** sets 1 keV cuts on TPC drift gas mediums
-*before* `simcuts.dat` is read:
+**SetSpecialPhysicsCuts():** adds a TPC subclass override that sets 1 keV
+cuts on TPC drift gas mediums *before* calling the base class (which reads
+`simcuts.dat`):
 ```cpp
-if (detParam.UseGeant4Edep) {
-    for (int med : {kDriftGas1, kDriftGas2, kCO2}) {
-        matmgr.SpecialCut("TPC", med, ECut::kCUTELE, 1e-6f); // 1 keV
-        matmgr.SpecialCut("TPC", med, ECut::kCUTGAM, 1e-6f);
-        matmgr.SpecialCut("TPC", med, ECut::kDCUTE,  1e-6f);
-        matmgr.SpecialCut("TPC", med, ECut::kBCUTE,  1e-6f);
+void Detector::SetSpecialPhysicsCuts()
+{
+  if (detParam.UseGeant4Edep) {
+    auto& matmgr = o2::base::MaterialManager::Instance();
+    for (int med : {(int)kDriftGas1, (int)kDriftGas2, (int)kCO2}) {
+      matmgr.SpecialCut(GetName(), med, o2::base::ECut::kCUTELE, 1e-6f);
+      matmgr.SpecialCut(GetName(), med, o2::base::ECut::kCUTGAM, 1e-6f);
+      matmgr.SpecialCut(GetName(), med, o2::base::ECut::kDCUTE,  1e-6f);
+      matmgr.SpecialCut(GetName(), med, o2::base::ECut::kBCUTE,  1e-6f);
     }
+  }
+  o2::base::Detector::SetSpecialPhysicsCuts(); // reads simcuts.dat AFTER
 }
-o2::base::Detector::SetSpecialPhysicsCuts(); // then load simcuts.dat
 ```
-`TG4GeometryManager` honours the **first** value set for each
-(medium, parameter) pair — later calls are silently ignored. By setting
-1 keV before `simcuts.dat` (which sets 10 keV for drift gas), our value
-wins and Auger electrons (minimum 1.921 keV) are tracked rather than killed.
+
+**Why `simcuts.dat` is not modified:**
+`simcuts.dat` (installed at `$O2_ROOT/share/Detectors/TPC/simulation/data/`)
+hardcodes `CUTELE = 1e-5 GeV = 10 keV` for TPC drift gas mediums 1, 2 and 3
+(`kDriftGas1`, `kDriftGas2`, `kCO2`). This 10 keV floor kills Kr decay products
+before they can be tracked: the K-shell conversion electron at 9.4 keV, L-CE
+T2 at 7.475 keV, and Auger electrons at 1.921 keV all fall below 10 keV.
+
+`TG4GeometryManager` honours the **first** `Gstpar` call for each
+(medium, parameter) pair — subsequent calls are silently ignored. By calling
+`matmgr.SpecialCut` with 1 keV *before* the base class reads `simcuts.dat`,
+our 1 keV wins and `simcuts.dat` is effectively bypassed for these mediums
+without needing to edit or copy the installed file.
+
+Confirmed via the worker log: before the fix the log showed
+`Energy thresholds: e- 10 keV` for `TPC_Ne-CO2-N-2`; after the fix it shows
+`Energy thresholds: e- 1 keV`, confirming that Auger electrons at 1.921 keV
+are now tracked rather than killed at birth.
 
 ### Why it works
 

@@ -15,7 +15,7 @@
 #include "TSystem.h"
 //#endif
 
-void findKrBoxCluster(std::string inputFile = "tpcdigits.root", std::string outputFile = "BoxClusters.root", std::string_view gainMapFile = "../GainMap_2021-11-17_krypton_0.5T.root", long long maxEvents = -1, int lastTimeBin = 70000)
+void findKrBoxCluster(std::string inputFile = "tpcdigits.root", std::string outputFile = "BoxClusters.root", std::string_view gainMapFile = "../GainMap_2021-11-17_krypton_0.5T.root", long long maxEvents = -1, int lastTimeBin = 70000, int maxClusterSizeTime = 3)
 {
   ULong_t runRead = -1;
   uint32_t run = 0;
@@ -62,6 +62,8 @@ void findKrBoxCluster(std::string inputFile = "tpcdigits.root", std::string outp
   if (gainMapFile.size())
     clFinder->loadGainMapFromFile(gainMapFile);
 
+  // row: IROC=3,OROC1=2,OROC2=2,OROC3=1  pad: IROC=5,OROC1=3,OROC2=3,OROC3=3  time: param
+  clFinder->setMaxClusterSize(3, 2, 2, 1, 5, 3, 3, 3, maxClusterSizeTime);
   // clFinder->setMinNumberOfNeighbours(0);
   // clFinder->setMinQTreshold(0);
   clFinder->setMaxTimes(lastTimeBin);
@@ -106,7 +108,7 @@ void findKrBoxCluster(std::string inputFile = "tpcdigits.root", std::string outp
       // through every real time bin including the peak.
       const int lastT = digits.back().getTimeStamp();
       digits.emplace_back(digits.back().getCRU(), 0.f, digits.back().getRow(),
-                          digits.back().getPad(), lastT + 4);
+                          digits.back().getPad(), lastT + maxClusterSizeTime + 1);
       clFinder->loopOverSector(*sector, i);
       digits.pop_back(); // remove sentinel so the TTree branch data is restored
     }

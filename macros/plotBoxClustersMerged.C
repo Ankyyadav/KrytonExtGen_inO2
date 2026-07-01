@@ -15,10 +15,13 @@
 // qualityCuts: true (default) applies AliceOldData.C sigma cuts
 //
 // Output ROOT file (always written):
-//   kr_spectra.root  with directory structure sector_XX / IROC | OROC1 | OROC2 | OROC3
-//   Each subdirectory contains:
-//     hCharge_SecXX_ROC  — TH1F charge spectrum
-//     h2DSize_SecXX_ROC  — TH2F cluster size vs charge
+//   kr_spectra.root  with directory structure:
+//     sector_XX / IROC | OROC1 | OROC2 | OROC3  — per-sector per-ROC histograms
+//       hCharge_SecXX_ROC  — TH1F charge spectrum
+//       h2DSize_SecXX_ROC  — TH2F cluster size vs charge
+//     Merged / IROC | OROC1 | OROC2 | OROC3 | ALL  — summed over all 36 sectors
+//       hCharge_Merged_ROC  — TH1F merged charge spectrum
+//       h2DSize_Merged_ROC  — TH2F merged cluster size vs charge
 //
 // Output PDF (canvas):
 //   merged charge spectrum for the requested (rocSel, sectorSel) + Kr fit
@@ -102,7 +105,9 @@ static void fitKrSpectrum(TH1F* h, double mu41)
   for (int i = 0; i < 5; i++) {
     fg[i] = new TF1(Form("fg_pre%d",i),"gaus",rlo[i],rhi[i]);
     fg[i]->SetParameters(TMath::Max(h->GetBinContent(h->FindBin(mu[i])),1.),mu[i],sig0[i]);
-    fg[i]->SetParLimits(2, mu[i]*0.01, mu[i]*0.20);
+    fg[i]->SetParLimits(0, 0., 1e9);                    // amplitude non-negative
+    fg[i]->SetParLimits(1, mu[i]*0.90, mu[i]*1.10);     // mu: ±10%
+    fg[i]->SetParLimits(2, 5., mu[i]*0.35);             // sigma: 5 ADC floor, generous upper
     h->Fit(fg[i],"RQN0");
   }
 
@@ -132,9 +137,9 @@ static void fitKrSpectrum(TH1F* h, double mu41)
   total->SetParLimits(3,mu41*0.55,mu41*1.10);
   total->SetParLimits(4,mu41*0.022,mu41*0.30);
   for (int i = 0; i < 5; i++) {
-    total->SetParLimits(5+3*i,0.,1e9);
-    total->SetParLimits(6+3*i,mu[i]*0.85,mu[i]*1.15);
-    total->SetParLimits(7+3*i,mu[i]*0.01,mu[i]*0.20);
+    total->SetParLimits(5+3*i, 0., 1e9);                // amplitude non-negative
+    total->SetParLimits(6+3*i, mu[i]*0.90, mu[i]*1.10); // mu: ±10%
+    total->SetParLimits(7+3*i, 5., mu[i]*0.35);         // sigma: 5 ADC floor, generous upper
   }
   total->SetLineColor(kBlack); total->SetLineWidth(2);
   TFitResultPtr r = h->Fit(total,"RS");
@@ -178,7 +183,7 @@ static void fitKrSpectrum(TH1F* h, double mu41)
 // ── Main ─────────────────────────────────────────────────────────────────────
 void plotBoxClustersMerged(
     const char* inputFile   = "BoxClusters.root",
-    const char* rocSel      = "IROC",
+    const char* rocSel      = "ALL",
     int         sectorSel   = -1,
     bool        qualityCuts = true,
     const char* outputPdf   = "")
@@ -326,6 +331,40 @@ void plotBoxClustersMerged(
   printf("In canvas selection : %lld (%.1f%%)\n",
     nMerged, nTotal > 0 ? 100.*nMerged/nTotal : 0.);
 
+  // ── Build Merged/ histograms (sum over all sectors) ──────────────────────
+  TH1F* hMgCharge[4];
+  TH2F* hMgSize[4];
+  for (int r = 0; r < 4; r++) {
+    hMgCharge[r] = new TH1F(
+      Form("hCharge_Merged_%s", kRocNames[r]),
+      Form("All sectors -- %s;Total cluster charge (ADC counts);Number of entries per %.0f ADC",
+           kRocNames[r], binW),
+      nBins, 0., xMax);
+    hMgCharge[r]->SetDirectory(nullptr);
+    hMgSize[r] = new TH2F(
+      Form("h2DSize_Merged_%s", kRocNames[r]),
+      Form("All sectors -- %s;Total cluster charge (ADC counts);Cluster size (digits)",
+           kRocNames[r]),
+      200, 0., xMax, 120, 0., 120.);
+    hMgSize[r]->SetDirectory(nullptr);
+    for (int s = 0; s < 36; s++) {
+      hMgCharge[r]->Add(hCharge[s][r]);
+      hMgSize[r]->Add(h2DSize[s][r]);
+    }
+  }
+  TH1F* hMgChargeAll = new TH1F("hCharge_Merged_ALL",
+    Form("All sectors -- ALL ROCs;Total cluster charge (ADC counts);Number of entries per %.0f ADC", binW),
+    nBins, 0., xMax);
+  hMgChargeAll->SetDirectory(nullptr);
+  TH2F* hMgSizeAll = new TH2F("h2DSize_Merged_ALL",
+    "All sectors -- ALL ROCs;Total cluster charge (ADC counts);Cluster size (digits)",
+    200, 0., xMax, 120, 0., 120.);
+  hMgSizeAll->SetDirectory(nullptr);
+  for (int r = 0; r < 4; r++) {
+    hMgChargeAll->Add(hMgCharge[r]);
+    hMgSizeAll->Add(hMgSize[r]);
+  }
+
   // ── Save all per-sector/ROC histograms to ROOT file ───────────────────────
   auto out = TFile::Open("kr_spectra.root", "RECREATE");
   for (int s = 0; s < 36; s++) {
@@ -337,6 +376,17 @@ void plotBoxClustersMerged(
       h2DSize[s][r]->Write();
     }
   }
+  auto* mrgDir = out->mkdir("Merged");
+  for (int r = 0; r < 4; r++) {
+    auto* mrgRocDir = mrgDir->mkdir(kRocNames[r]);
+    mrgRocDir->cd();
+    hMgCharge[r]->Write();
+    hMgSize[r]->Write();
+  }
+  auto* mrgAllDir = mrgDir->mkdir("ALL");
+  mrgAllDir->cd();
+  hMgChargeAll->Write();
+  hMgSizeAll->Write();
   out->cd();
   hMerged->Write("hMerged");
   out->Close();
@@ -364,7 +414,16 @@ void plotBoxClustersMerged(
   std::string pdfName;
   if (std::string(outputPdf).empty()) {
     std::string secStr = (sectorSel<0) ? "allsec" : Form("s%02d", sectorSel);
-    pdfName = Form("kr_%s_%s.pdf", roc.c_str(), secStr.c_str());
+    // Extract tag from inputFile: BoxClusters_TAG.root → _TAG, else empty
+    std::string inStr(inputFile);
+    std::string tag;
+    auto stem = inStr.substr(inStr.rfind('/')+1); // basename
+    const std::string prefix = "BoxClusters";
+    if (stem.size() > prefix.size() + 5 && stem.substr(0, prefix.size()) == prefix) {
+      tag = stem.substr(prefix.size()); // e.g. "_rangeCut01mm.root"
+      if (tag.size() > 5) tag = tag.substr(0, tag.size()-5); // strip ".root"
+    }
+    pdfName = Form("kr_%s_%s%s.pdf", roc.c_str(), secStr.c_str(), tag.c_str());
     for (auto& c : pdfName) c = tolower(c);
   } else {
     pdfName = outputPdf;
