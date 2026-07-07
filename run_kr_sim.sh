@@ -15,6 +15,7 @@ NEVENTS=5000
 NWORKERS=4
 ENGINE="TGeant4"
 OUTPUT_PREFIX="o2sim_kr"
+N_PER_EVENT=1000
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOADER="${SCRIPT_DIR}/macros/GeneratorKrDecayLoader.C"
@@ -24,10 +25,11 @@ LIB_SO="/tmp/libGeneratorKrDecay.so"
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    -n|--nevents)  NEVENTS="$2";       shift 2 ;;
-    -w|--nworkers) NWORKERS="$2";      shift 2 ;;
-    --engine)      ENGINE="$2";        shift 2 ;;
-    -o|--output)   OUTPUT_PREFIX="$2"; shift 2 ;;
+    -n|--nevents)    NEVENTS="$2";       shift 2 ;;
+    -w|--nworkers)   NWORKERS="$2";      shift 2 ;;
+    --engine)        ENGINE="$2";        shift 2 ;;
+    -o|--output)     OUTPUT_PREFIX="$2"; shift 2 ;;
+    --nPerEvent)     N_PER_EVENT="$2";   shift 2 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -84,29 +86,35 @@ cp "$GENERATOR_PATH" "$SAFE_PATH"
 
 # Physics: FTFP_BERT_PEN (Penelope EM) with custom g4config.
 # Key settings in kr_g4config.in:
-#   /mcPhysics/rangeCuts 4 nm → energy threshold ~1.69 keV for TPC_Ne-CO2-N-2
-#                                G4RToEConvForElectron has formula kink at 10 keV;
-#                                100 nm gave 10 keV (killing Auger + T2-CE); 4 nm
-#                                gives 1.69 keV (below Auger 1.921 keV) — all Kr
-#                                decay electrons are now properly tracked.
-#   /process/em/deexcitationIgnoreCut → Auger/fluorescence tracked below cut
+#   /mcPhysics/rangeCuts 0.0001 mm — TG4RegionsManager2 runs in energy-cut mode and
+#                                     overrides this for named regions via simcuts.dat.
+#                                     The actual 1 keV threshold for TPC drift gas comes
+#                                     from Detector.cxx::SetSpecialPhysicsCuts() setting
+#                                     CUTELE=1 keV BEFORE simcuts.dat is read (first-wins
+#                                     rule in TG4GeometryManager). rangeCuts is kept because
+#                                     it empirically improves resolution by ~0.9% (likely via
+#                                     Penelope restricted-DEDX table for delta-ray production).
+#   /process/em/deexcitationIgnoreCut → Auger/fluorescence tracked regardless of production cut
 #   /process/eLoss/StepFunction 1.0 1 mm → compact ionization deposit, high per-digit ADC
 #   Optical commands removed  → FTFP_BERT_PEN has no optical physics; those commands
 #                                caused "Batch is interrupted!!" skipping transportationWithMsc,
 #                                skipUnknownParticles, and looper threshold commands.
 #
-# VMC cuts:  CUTELE=1 keV, CUTGAM=1 keV (secondary kill via G4UserSpecialCuts)
-#            Production cut from rangeCuts=4 nm gives threshold ~1.69 keV in TPC gas,
-#            allowing all Kr primaries (min 1.921 keV Auger) to deposit energy correctly.
-# DRAY=1:    delta ray production enabled; δ-rays above ~1.69 keV are now tracked
-#            (range > 4 nm in TPC gas)
-CV="GeneratorExternal.fileName=${SAFE_PATH};GeneratorExternal.funcName=GeneratorKrDecay();align-geom.mDetectors=none;G4.physicsmode=kUSER;G4.userPhysicsList=FTFP_BERT_PEN;G4.configMacroFile=${SCRIPT_DIR}/kr_g4config.in;GlobalSimProcs.DRAY=1;GlobalSimProcs.CUTELE=0.000001;GlobalSimProcs.CUTGAM=0.000001;SimCutParams.stepFiltering=false;TPCDetParam.UseGeant4Edep=1;GenTPCLoopers.loopersVeto=true"
+# VMC cuts:  CUTELE=1 keV, CUTGAM=1 keV — global G4UserSpecialCuts kill threshold.
+#            Backed by the SetSpecialPhysicsCuts override in Detector.cxx.
+#            CUTGAM=1 keV is needed: Kα (12.6 keV) and T2-γ (9.4 keV) must propagate
+#            to form separate clusters; a 10 keV CUTGAM from simcuts.dat would kill them.
+# DRAY/stepFiltering: removed — both confirmed to have no effect on spectrum with
+#            UseGeant4Edep=1 (delta rays are handled internally by Penelope EM).
+export KR_N_PER_EVENT="${N_PER_EVENT}"
+CV="GeneratorExternal.fileName=${SAFE_PATH};GeneratorExternal.funcName=GeneratorKrDecay();align-geom.mDetectors=none;G4.physicsmode=kUSER;G4.userPhysicsList=FTFP_BERT_PEN;G4.configMacroFile=${SCRIPT_DIR}/kr_g4config.in;GlobalSimProcs.CUTELE=0.000001;GlobalSimProcs.CUTGAM=0.000001;TPCDetParam.UseGeant4Edep=1;GenTPCLoopers.loopersVeto=true"
 
 {
   echo "========================================="
   echo "  83mKr TPC calibration simulation"
   echo "========================================="
   echo "  Events   : ${NEVENTS}"
+  echo "  Kr/event : ${N_PER_EVENT}  (KR_N_PER_EVENT=${N_PER_EVENT})"
   echo "  Workers  : ${NWORKERS}"
   echo "  Engine   : ${ENGINE}"
   echo "  Field    : 0 T"

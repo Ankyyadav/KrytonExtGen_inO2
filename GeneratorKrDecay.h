@@ -19,7 +19,7 @@ namespace KrGenConfig {
   inline double rInner    = 83.5;
   inline double rOuter    = 246.5;  // TPC outermost pad row outer edge ~247 cm; stay inside
   inline double halfZ     = 249.7;
-  inline int    nPerEvent = 1;
+  inline int    nPerEvent = 1000;   // override at runtime via KR_N_PER_EVENT env var
 }
 
 struct KrProduct { int pdg; double eKin; };

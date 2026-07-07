@@ -160,18 +160,19 @@ _run_digi_here() {
     local cnt ms elapsed
     cnt=$(grep -c "TPC: Flushed [^0]" log.digi 2>/dev/null || true)
     cnt=${cnt:-0}
-    local interval=$(( nevents_hint > 0 ? (nevents_hint / 10) : 5000 ))
-    (( interval < 500 )) && interval=500
-    ms=$(( (cnt / interval) * interval ))
+    # "TPC: Flushed" fires multiple times per TF (once per lane/sector group);
+    # divide by TPC_LANES to approximate TF count.
+    local cnt_tf=$(( TPC_LANES > 0 ? cnt / TPC_LANES : cnt ))
+    local interval=50
+    ms=$(( (cnt_tf / interval) * interval ))
     elapsed=$(( $(date +%s) - start ))
     if (( ms > last_ms )); then
       if (( nevents_hint > 0 )); then
-        local pct=$(( cnt * 100 / nevents_hint ))
-        printf "[DIGI]%s %ds | ~%d/%d events (~%d%%)\n" \
-          "${label:+ $label}" $elapsed $cnt $nevents_hint $pct
+        printf "[DIGI]%s %ds | ~%d/%d TFs\n" \
+          "${label:+ $label}" $elapsed $cnt_tf $nevents_hint
       else
-        printf "[DIGI]%s %ds | ~%d events\n" \
-          "${label:+ $label}" $elapsed $cnt
+        printf "[DIGI]%s %ds | ~%d TFs\n" \
+          "${label:+ $label}" $elapsed $cnt_tf
       fi
       last_ms=$ms
     fi
@@ -182,8 +183,9 @@ _run_digi_here() {
   local elapsed final_cnt
   elapsed=$(( $(date +%s) - start ))
   final_cnt=$(grep -c "TPC: Flushed [^0]" log.digi 2>/dev/null || true)
-  printf "[DIGI]%s Finished in %ds | ~%d events with TPC digits (exit=%d)\n" \
-    "${label:+ $label}" $elapsed "${final_cnt:-0}" $rc
+  local final_tf=$(( TPC_LANES > 0 ? ${final_cnt:-0} / TPC_LANES : ${final_cnt:-0} ))
+  printf "[DIGI]%s Finished in %ds | ~%d TFs digitized (exit=%d)\n" \
+    "${label:+ $label}" $elapsed "${final_tf}" $rc
   return $rc
 }
 

@@ -100,6 +100,10 @@ GeneratorKrDecay::~GeneratorKrDecay() { delete mTable; }
 
 Bool_t GeneratorKrDecay::Init()
 {
+  if (const char* env = std::getenv("KR_N_PER_EVENT")) {
+    int n = std::atoi(env);
+    if (n > 0) KrGenConfig::nPerEvent = n;
+  }
   std::cout << "[GeneratorKrDecay] Init:"
             << " rInner="    << KrGenConfig::rInner
             << " rOuter="    << KrGenConfig::rOuter

@@ -48,6 +48,8 @@
 #include <vector>
 #include <string>
 #include <iostream>
+#include <ctime>
+#include <cstdio>
 
 // ── ROC row boundaries ────────────────────────────────────────────────────────
 static const int kIROC_LAST  =  62;
@@ -84,7 +86,7 @@ static bool inRocSel(int rocIdx, const std::string& roc)
 //   [11..13]      29.1 keV Gaussian
 //   [14..16]      32.2 keV Gaussian
 //   [17..19]      41.6 keV Gaussian
-static void fitKrSpectrum(TH1F* h, double mu41)
+static void fitKrSpectrum(TH1F* h, double mu41, const std::string& tag = "")
 {
   const double ratio[5] = { 9.4/41.6, 12.6/41.6, 29.1/41.6, 32.2/41.6, 1.0 };
   const char*  lbl[5]   = { "T2#gamma 9.4 keV", "K#alpha 12.6 keV",
@@ -170,14 +172,44 @@ static void fitKrSpectrum(TH1F* h, double mu41)
   printf("\n==== Kr-83m spectrum fit [%s] ====\n", h->GetTitle());
   printf("  41.6 keV seed : %.1f ADC\n", mu41);
   printf("  chi2/ndf      : %.2f\n", chi2ndf);
-  printf("  %-22s  %14s  %12s\n","Peak","mu_fit [ADC]","sigma [ADC]");
-  printf("  %-22s  %14s  %12s\n","----","------------","-----------");
+  printf("  %-22s  %14s  %12s  %8s\n","Peak","mu_fit [ADC]","sigma [ADC]","reso [%]");
+  printf("  %-22s  %14s  %12s  %8s\n","----","------------","-----------","--------");
   for (int i = 0; i < 5; i++) {
-    printf("  %-22s  %7.1f +/- %4.1f  %5.1f +/- %3.1f\n",
-      lbl[i], total->GetParameter(6+3*i), total->GetParError(6+3*i),
-      TMath::Abs(total->GetParameter(7+3*i)), total->GetParError(7+3*i));
+    double mu_i    = total->GetParameter(6+3*i);
+    double sigma_i = TMath::Abs(total->GetParameter(7+3*i));
+    double reso    = (mu_i > 0.) ? 100.*sigma_i/mu_i : -1.;
+    printf("  %-22s  %7.1f +/- %4.1f  %5.1f +/- %3.1f  %7.2f%%\n",
+      lbl[i], mu_i, total->GetParError(6+3*i),
+      sigma_i, total->GetParError(7+3*i), reso);
   }
   printf("==============================================\n\n");
+
+  if (!tag.empty()) {
+    const char* logFile = "kr_reso_log.txt";
+    bool writeHeader = false;
+    if (FILE* chk = fopen(logFile, "r")) { fclose(chk); } else { writeHeader = true; }
+    FILE* logf = fopen(logFile, "a");
+    if (logf) {
+      if (writeHeader)
+        fprintf(logf, "%-10s  %-42s  %-16s  %8s  %6s  %8s  %6s  %8s\n",
+          "date", "tag", "peak", "mu_ADC", "mu_err", "sigma_ADC", "sig_err", "reso_pct");
+      time_t now = time(nullptr);
+      char datebuf[12];
+      strftime(datebuf, sizeof(datebuf), "%Y-%m-%d", localtime(&now));
+      const char* peakKey[5] = {"9.4keV","12.6keV","29.1keV","32.2keV","41.6keV_main"};
+      for (int i = 0; i < 5; i++) {
+        double mu_i    = total->GetParameter(6+3*i);
+        double sigma_i = TMath::Abs(total->GetParameter(7+3*i));
+        double reso    = (mu_i > 0.) ? 100.*sigma_i/mu_i : -1.;
+        fprintf(logf, "%-10s  %-42s  %-16s  %8.1f  %6.1f  %8.1f  %6.1f  %8.3f\n",
+          datebuf, tag.c_str(), peakKey[i],
+          mu_i, total->GetParError(6+3*i),
+          sigma_i, total->GetParError(7+3*i), reso);
+      }
+      fclose(logf);
+      printf("  → appended to %s\n\n", logFile);
+    }
+  }
 }
 
 // ── Main ─────────────────────────────────────────────────────────────────────
@@ -410,19 +442,22 @@ void plotBoxClustersMerged(
   printf("41.6 keV seed peak  : %.0f ADC%s\n", mu41,
     goodSpectrum ? " [OK]" : " [WRONG SPECTRUM]");
 
+  // Extract tag from inputFile: BoxClusters_TAG.root → _TAG, else empty
+  std::string tag;
+  {
+    std::string inStr(inputFile);
+    auto stem = inStr.substr(inStr.rfind('/')+1);
+    const std::string prefix = "BoxClusters";
+    if (stem.size() > prefix.size() + 5 && stem.substr(0, prefix.size()) == prefix) {
+      tag = stem.substr(prefix.size());
+      if (tag.size() > 5) tag = tag.substr(0, tag.size()-5); // strip ".root"
+    }
+  }
+
   // Determine PDF name
   std::string pdfName;
   if (std::string(outputPdf).empty()) {
     std::string secStr = (sectorSel<0) ? "allsec" : Form("s%02d", sectorSel);
-    // Extract tag from inputFile: BoxClusters_TAG.root → _TAG, else empty
-    std::string inStr(inputFile);
-    std::string tag;
-    auto stem = inStr.substr(inStr.rfind('/')+1); // basename
-    const std::string prefix = "BoxClusters";
-    if (stem.size() > prefix.size() + 5 && stem.substr(0, prefix.size()) == prefix) {
-      tag = stem.substr(prefix.size()); // e.g. "_rangeCut01mm.root"
-      if (tag.size() > 5) tag = tag.substr(0, tag.size()-5); // strip ".root"
-    }
     pdfName = Form("kr_%s_%s%s.pdf", roc.c_str(), secStr.c_str(), tag.c_str());
     for (auto& c : pdfName) c = tolower(c);
   } else {
@@ -439,7 +474,7 @@ void plotBoxClustersMerged(
   hMerged->Draw("HIST");
 
   if (goodSpectrum) {
-    fitKrSpectrum(hMerged, mu41);
+    fitKrSpectrum(hMerged, mu41, tag);
   } else {
     const double ratio[5] = { 9.4/41.6,12.6/41.6,29.1/41.6,32.2/41.6,1.0 };
     const int    pcol[5]  = { kOrange+2,kGreen+2,kMagenta,kCyan+2,kRed };

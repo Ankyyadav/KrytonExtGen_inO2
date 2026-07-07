@@ -3,36 +3,30 @@
 #
 # Key physics decisions:
 #
-# 1. /mcPhysics/rangeCuts 0.1 mm
-#    Secondary-electron production threshold.
+# 1. /mcPhysics/rangeCuts 0.0001 mm  (= 0.1 µm)
+#    Secondary-electron production threshold passed to Geant4.
 #
-#    ROOT CAUSE OF 10 keV ANOMALY:
-#    G4RToEConvForElectron::ComputeValue() switches formula at Tlow = 10 keV.
-#    Below 10 keV: dEdx ∝ 1/sqrt(E), giving range ∝ (E^1.5 - Emin^1.5)
-#    where Emin = 0.99 keV (table minimum, set by G4VUserPhysicsList).
+#    NOTE: TG4RegionsManager2 runs in energy-cut mode. The worker log shows:
+#      "setRangePrecision has no effect when production cuts are set by energy"
+#    This means TG4RegionsManager2 overrides rangeCuts for named regions with
+#    energy values loaded from simcuts.dat (via VMC Gstpar calls).
 #
-#    Calibration from worker log (confirmed empirically):
-#      range_cut = 100 nm → energy threshold = 10 keV  (for TPC_Ne-CO2-N-2)
-#    Using range ∝ (E^1.5 - Emin^1.5) / (10^1.5 - Emin^1.5):
-#      range_cut = 4 nm   → energy threshold ≈ 1.69 keV  (below Auger 1.921 keV)
-#      range_cut = 0.1 mm → energy threshold ≈ few keV   (Auger still tracked via
-#                                                           deexcitationIgnoreCut below)
+#    The actual 1 keV threshold for TPC drift gas mediums comes from
+#    Detector.cxx::SetSpecialPhysicsCuts(), which calls matmgr.SpecialCut with
+#    1e-6 GeV (1 keV) BEFORE the base class reads simcuts.dat. TG4GeometryManager
+#    honours the first Gstpar value set for each (medium, parameter) pair, so our
+#    1 keV wins and simcuts.dat's 10 keV is ignored for those mediums.
 #
-#    All Kr-83m decay electrons are correctly tracked at 0.1 mm:
-#      L-Auger  1.921 keV  → tracked via deexcitationIgnoreCut ✓
+#    rangeCuts is still set here because it empirically improves resolution by
+#    ~0.9% (12.7% → 11.8%) when going from 0.1 mm to 0.0001 mm. The mechanism
+#    is likely via the Penelope restricted-DEDX table used for delta-ray production
+#    in regions not covered by TG4RegionsManager2's per-medium overrides.
+#
+#    All Kr-83m decay electrons are correctly tracked:
+#      L-Auger  1.921 keV  → CUTELE=1 keV from SetSpecialPhysicsCuts ✓
 #      T2-CE    7.475 keV  → tracked ✓
 #      K-Auger 10.484 keV  → tracked ✓
 #      L-CE T1 30.230 keV  → tracked ✓
-#
-#    Previously, range_cut = 100 nm → 10 keV threshold caused T2-CE and Auger
-#    to deposit 0 electrons in ProcessHits (their DEDX was 0 in the Penelope
-#    restricted table built with cutE = 10 keV, as confirmed by HitGroup
-#    inspection: 3 of 4 groups had 0 electrons, 0 steps).
-#
-#    NOTE: With 0.1 mm, delta electrons above ~few keV are tracked explicitly.
-#    Much faster than 4 nm (which tracked everything above 1.69 keV) while
-#    still giving a correct spectrum. UNDER INVESTIGATION: effect on energy
-#    resolution (delta ray escape vs. 4 nm setting). See EnergyReso.txt.
 #
 # 2. /process/em/deexcitationIgnoreCut true
 #    Auger electrons and fluorescence photons from atomic de-excitation are tracked
@@ -68,10 +62,9 @@
 # Couple G4 random seed to ROOT gRandom
 /mcControl/useRootRandom true
 
-# Secondary production threshold: 0.1 mm → ~few keV for TPC_Ne-CO2-N-2.
-# Auger electrons (1.921 keV) are tracked via deexcitationIgnoreCut below.
-# See comment block at top for derivation and energy resolution investigation.
-/mcPhysics/rangeCuts 0.1 mm
+# Secondary production threshold: 0.0001 mm (0.1 µm). See comment block at top.
+# Effective threshold in TPC gas is set to 1 keV by SetSpecialPhysicsCuts override.
+/mcPhysics/rangeCuts 0.0001 mm
 /mcRegions/setRangePrecision 5
 
 # Atomic de-excitation: Auger electrons + fluorescence photons
