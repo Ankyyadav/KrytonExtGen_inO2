@@ -149,7 +149,7 @@ _run_digi_here() {
     --tpc-lanes "$TPC_LANES" \
     --configKeyValues "$DIGI_CONFIGKV" \
     -b \
-    -- --shm-segment-size 0 \
+    -- --shm-segment-size $SHM_SIZE \
     &> log.digi &
   local pid=$!
 
