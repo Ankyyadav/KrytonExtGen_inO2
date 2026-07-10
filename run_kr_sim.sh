@@ -16,6 +16,9 @@ NWORKERS=4
 ENGINE="TGeant4"
 OUTPUT_PREFIX="o2sim_kr"
 N_PER_EVENT=1000
+ECUT_GEV=0.000001   # 1 keV default (CUTELE and CUTGAM)
+PHYSLIST="FTFP_BERT_LIV"           # Geant4 physics list (Livermore EM — best for keV-scale Kr)
+FIELD_KGAUSS=0                     # magnetic field in kGauss (0=no field, 5=nominal ALICE 0.5T)
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOADER="${SCRIPT_DIR}/macros/GeneratorKrDecayLoader.C"
@@ -29,7 +32,10 @@ while [[ $# -gt 0 ]]; do
     -w|--nworkers)   NWORKERS="$2";      shift 2 ;;
     --engine)        ENGINE="$2";        shift 2 ;;
     -o|--output)     OUTPUT_PREFIX="$2"; shift 2 ;;
-    --nPerEvent)     N_PER_EVENT="$2";   shift 2 ;;
+    -d|--nPerEvent)     N_PER_EVENT="$2";   shift 2 ;;
+    --ecut)             ECUT_GEV="$2";      shift 2 ;;
+    --physlist)         PHYSLIST="$2";      shift 2 ;;
+    --field)            FIELD_KGAUSS="$2";  shift 2 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
   esac
 done
@@ -84,7 +90,7 @@ rm -f o2sim_Kine.root o2sim_HitsTPC.root o2sim_MCHeader.root \
 SAFE_PATH="/tmp/GeneratorKrDecay_loader.C"
 cp "$GENERATOR_PATH" "$SAFE_PATH"
 
-# Physics: FTFP_BERT_PEN (Penelope EM) with custom g4config.
+# Physics: FTFP_BERT_LIV (Livermore EM) with custom g4config.
 # Key settings in kr_g4config.in:
 #   /mcPhysics/rangeCuts 0.0001 mm — TG4RegionsManager2 runs in energy-cut mode and
 #                                     overrides this for named regions via simcuts.dat.
@@ -93,10 +99,11 @@ cp "$GENERATOR_PATH" "$SAFE_PATH"
 #                                     CUTELE=1 keV BEFORE simcuts.dat is read (first-wins
 #                                     rule in TG4GeometryManager). rangeCuts is kept because
 #                                     it empirically improves resolution by ~0.9% (likely via
-#                                     Penelope restricted-DEDX table for delta-ray production).
+#                                     Livermore data-driven DEDX tables for delta-ray production).
 #   /process/em/deexcitationIgnoreCut → Auger/fluorescence tracked regardless of production cut
-#   /process/eLoss/StepFunction 1.0 1 mm → compact ionization deposit, high per-digit ADC
-#   Optical commands removed  → FTFP_BERT_PEN has no optical physics; those commands
+#   /process/eLoss/StepFunction 0.2 0.1 mm → limits each step to 20% energy loss, fine steps
+#                                below 0.1 mm; closes the gap to G4 standalone (8.0% vs 7.95%)
+#   Optical commands removed  → FTFP_BERT_LIV has no optical physics; those commands
 #                                caused "Batch is interrupted!!" skipping transportationWithMsc,
 #                                skipUnknownParticles, and looper threshold commands.
 #
@@ -107,7 +114,7 @@ cp "$GENERATOR_PATH" "$SAFE_PATH"
 # DRAY/stepFiltering: removed — both confirmed to have no effect on spectrum with
 #            UseGeant4Edep=1 (delta rays are handled internally by Penelope EM).
 export KR_N_PER_EVENT="${N_PER_EVENT}"
-CV="GeneratorExternal.fileName=${SAFE_PATH};GeneratorExternal.funcName=GeneratorKrDecay();align-geom.mDetectors=none;G4.physicsmode=kUSER;G4.userPhysicsList=FTFP_BERT_PEN;G4.configMacroFile=${SCRIPT_DIR}/kr_g4config.in;GlobalSimProcs.CUTELE=0.000001;GlobalSimProcs.CUTGAM=0.000001;TPCDetParam.UseGeant4Edep=1;GenTPCLoopers.loopersVeto=true"
+CV="GeneratorExternal.fileName=${SAFE_PATH};GeneratorExternal.funcName=GeneratorKrDecay();align-geom.mDetectors=none;G4.physicsmode=kUSER;G4.userPhysicsList=${PHYSLIST};G4.configMacroFile=${SCRIPT_DIR}/kr_g4config.in;GlobalSimProcs.CUTELE=${ECUT_GEV};GlobalSimProcs.CUTGAM=${ECUT_GEV};TPCDetParam.UseGeant4Edep=1;GenTPCLoopers.loopersVeto=true"
 
 {
   echo "========================================="
@@ -117,14 +124,14 @@ CV="GeneratorExternal.fileName=${SAFE_PATH};GeneratorExternal.funcName=Generator
   echo "  Kr/event : ${N_PER_EVENT}  (KR_N_PER_EVENT=${N_PER_EVENT})"
   echo "  Workers  : ${NWORKERS}"
   echo "  Engine   : ${ENGINE}"
-  echo "  Field    : 0 T"
+  echo "  Field    : ${FIELD_KGAUSS} kGauss"
   echo "  Generator: ${GENERATOR_PATH}"
   echo "  Output   : ${OUTPUT_PREFIX}"
   echo "  Log      : ${LOG_FILE}"
   echo "========================================="
 } | tee -a "$LOG_FILE"
 
-echo "+ o2-sim -g external -e ${ENGINE} -n ${NEVENTS} -m TPC --field 0 --nworkers ${NWORKERS} -o ${OUTPUT_PREFIX} --configKeyValues ..." \
+echo "+ o2-sim -g external -e ${ENGINE} -n ${NEVENTS} -m TPC --field ${FIELD_KGAUSS} --nworkers ${NWORKERS} -o ${OUTPUT_PREFIX} --configKeyValues ..." \
   | tee -a "$LOG_FILE"
 
 # Route o2-sim output through awk to prepend HH:MM:SS timestamps to every line.
@@ -136,7 +143,7 @@ awk '{ print strftime("[%H:%M:%S]"), $0; fflush() }' "$_LOG_FIFO" >> "$LOG_FILE"
 o2-sim -g external -e "${ENGINE}" \
   -n "${NEVENTS}" \
   -m TPC \
-  --field 0 \
+  --field "${FIELD_KGAUSS}" \
   --nworkers "${NWORKERS}" \
   -o "${OUTPUT_PREFIX}" \
   --timestamp 1 \

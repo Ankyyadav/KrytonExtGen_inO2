@@ -94,7 +94,19 @@ static void fitKrSpectrum(TH1F* h, double mu41, const std::string& tag = "")
   const int    col[5]   = { kOrange+2, kGreen+2, kMagenta, kCyan+2, kRed };
 
   double mu[5], sig0[5];
-  for (int i = 0; i < 5; i++) { mu[i] = mu41*ratio[i]; sig0[i] = mu[i]*0.06; }
+  for (int i = 0; i < 5; i++) { mu[i] = mu41*ratio[i]; sig0[i] = mu[i]*0.08; }
+
+  // Amplitude at the 41.6 keV seed bin (≈ histogram maximum).
+  // Satellite peaks (9.4, 12.6, 29.1, 32.2 keV) are each ~1/8 of the main peak;
+  // we allow [1/10, 1/5] of amp41.  The 41.6 keV peak itself gets [0.5, 2.0].
+  double amp41 = TMath::Max(h->GetBinContent(h->FindBin(mu41)), 1.);
+  const double alo[5] = { amp41/10., amp41/10., amp41/10., amp41/10., amp41*0.50 };
+  const double ahi[5] = { amp41/ 5., amp41/ 5., amp41/ 5., amp41/ 5., amp41*2.00 };
+
+  // Sigma limits: lower bound prevents single-bin spikes; upper bound scales
+  // with expected 1/sqrt(E) resolution degradation toward lower energies.
+  const double slo[5] = { mu[0]*0.05, mu[1]*0.05, mu[2]*0.04, mu[3]*0.04, mu[4]*0.03 };
+  const double shi[5] = { mu[0]*0.30, mu[1]*0.28, mu[2]*0.25, mu[3]*0.25, mu[4]*0.20 };
 
   const double xlo = mu41*0.11, xhi = mu41*1.20;
 
@@ -107,9 +119,9 @@ static void fitKrSpectrum(TH1F* h, double mu41, const std::string& tag = "")
   for (int i = 0; i < 5; i++) {
     fg[i] = new TF1(Form("fg_pre%d",i),"gaus",rlo[i],rhi[i]);
     fg[i]->SetParameters(TMath::Max(h->GetBinContent(h->FindBin(mu[i])),1.),mu[i],sig0[i]);
-    fg[i]->SetParLimits(0, 0., 1e9);                    // amplitude non-negative
-    fg[i]->SetParLimits(1, mu[i]*0.90, mu[i]*1.10);     // mu: ±10%
-    fg[i]->SetParLimits(2, 5., mu[i]*0.35);             // sigma: 5 ADC floor, generous upper
+    fg[i]->SetParLimits(0, alo[i], ahi[i]);
+    fg[i]->SetParLimits(1, mu[i]*0.90, mu[i]*1.10);
+    fg[i]->SetParLimits(2, slo[i], shi[i]);
     h->Fit(fg[i],"RQN0");
   }
 
@@ -130,18 +142,20 @@ static void fitKrSpectrum(TH1F* h, double mu41, const std::string& tag = "")
   total->SetParameter(3, mu41*0.904);
   total->SetParameter(4, mu41*0.103);
   for (int i = 0; i < 5; i++) {
-    total->SetParameter(5+3*i, TMath::Max(fg[i]->GetParameter(0),1.));
+    // Clamp pre-fit amplitude into [alo, ahi] before seeding the global fit
+    double aSeed = TMath::Min(TMath::Max(fg[i]->GetParameter(0), alo[i]), ahi[i]);
+    total->SetParameter(5+3*i, aSeed);
     total->SetParameter(6+3*i, fg[i]->GetParameter(1));
     total->SetParameter(7+3*i, TMath::Abs(fg[i]->GetParameter(2)));
   }
   total->SetParLimits(1,-0.02,0.);
   total->SetParLimits(2,0.,1e9);
-  total->SetParLimits(3,mu41*0.55,mu41*1.10);
-  total->SetParLimits(4,mu41*0.022,mu41*0.30);
+  total->SetParLimits(3, mu41*0.82, mu41*0.96);  // erfc centre: left shoulder of 41.6 keV
+  total->SetParLimits(4, mu41*0.02, mu41*0.20);
   for (int i = 0; i < 5; i++) {
-    total->SetParLimits(5+3*i, 0., 1e9);                // amplitude non-negative
-    total->SetParLimits(6+3*i, mu[i]*0.90, mu[i]*1.10); // mu: ±10%
-    total->SetParLimits(7+3*i, 5., mu[i]*0.35);         // sigma: 5 ADC floor, generous upper
+    total->SetParLimits(5+3*i, alo[i], ahi[i]);
+    total->SetParLimits(6+3*i, mu[i]*0.90, mu[i]*1.10);
+    total->SetParLimits(7+3*i, slo[i], shi[i]);
   }
   total->SetLineColor(kBlack); total->SetLineWidth(2);
   TFitResultPtr r = h->Fit(total,"RS");
@@ -191,21 +205,25 @@ static void fitKrSpectrum(TH1F* h, double mu41, const std::string& tag = "")
     FILE* logf = fopen(logFile, "a");
     if (logf) {
       if (writeHeader)
-        fprintf(logf, "%-10s  %-42s  %-16s  %8s  %6s  %8s  %6s  %8s\n",
-          "date", "tag", "peak", "mu_ADC", "mu_err", "sigma_ADC", "sig_err", "reso_pct");
+        fprintf(logf, "%-10s  %-38s  %8s  %8s  %8s  %8s  %8s  %8s  %8s\n",
+          "date", "tag",
+          "R_9.4%", "R_12.6%", "R_29.1%", "R_32.2%", "R_41.6%",
+          "mu_41.6", "sig_41.6");
       time_t now = time(nullptr);
       char datebuf[12];
       strftime(datebuf, sizeof(datebuf), "%Y-%m-%d", localtime(&now));
-      const char* peakKey[5] = {"9.4keV","12.6keV","29.1keV","32.2keV","41.6keV_main"};
+      double reso[5];
       for (int i = 0; i < 5; i++) {
         double mu_i    = total->GetParameter(6+3*i);
         double sigma_i = TMath::Abs(total->GetParameter(7+3*i));
-        double reso    = (mu_i > 0.) ? 100.*sigma_i/mu_i : -1.;
-        fprintf(logf, "%-10s  %-42s  %-16s  %8.1f  %6.1f  %8.1f  %6.1f  %8.3f\n",
-          datebuf, tag.c_str(), peakKey[i],
-          mu_i, total->GetParError(6+3*i),
-          sigma_i, total->GetParError(7+3*i), reso);
+        reso[i] = (mu_i > 0.) ? 100.*sigma_i/mu_i : -1.;
       }
+      double mu41f  = total->GetParameter(6+3*4);
+      double sig41f = TMath::Abs(total->GetParameter(7+3*4));
+      fprintf(logf, "%-10s  %-38s  %8.3f  %8.3f  %8.3f  %8.3f  %8.3f  %8.1f  %8.1f\n",
+        datebuf, tag.c_str(),
+        reso[0], reso[1], reso[2], reso[3], reso[4],
+        mu41f, sig41f);
       fclose(logf);
       printf("  → appended to %s\n\n", logFile);
     }

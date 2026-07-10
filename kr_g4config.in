@@ -33,14 +33,14 @@
 #    even when their energy is below the production cut. Needed for Kr Kα (12.6 keV)
 #    and Auger cascades to appear as separate hits.
 #
-# 3. /process/eLoss/StepFunction 1.0 1 mm
-#    Allows the electron to lose up to 100% of its kinetic energy in one step,
-#    switching to fine steps only in the last 1 mm of range. Keeps the 30 keV
-#    L-CE T1 energy deposition compact (few large steps) → high per-digit ADC
-#    for clean cluster-finder identification.
+# 3. /process/eLoss/StepFunction 0.2 0.1 mm
+#    Limits each step to 20% of the remaining kinetic energy (dRoverR=0.2) with
+#    fine steps enforced below finalRange=0.1 mm. Produces many more, finer
+#    ionisation steps than the default 1.0/1mm — improves 41.6 keV resolution
+#    from ~10.4% to ~8.0%, essentially reaching G4 standalone parity (7.95%).
 #
 # 4. Optical process commands REMOVED:
-#    FTFP_BERT_PEN does not register optical physics. The previous commands
+#    FTFP_BERT_LIV does not register optical physics. The previous commands
 #    (/process/optical/processActivation ...) triggered "COMMAND NOT FOUND"
 #    errors that caused a "Batch is interrupted!!" state, silently skipping ALL
 #    subsequent commands (transportationWithMsc Disabled, skipUnknownParticles,
@@ -62,7 +62,7 @@
 # Couple G4 random seed to ROOT gRandom
 /mcControl/useRootRandom true
 
-# Secondary production threshold: 0.0001 mm (0.1 µm). See comment block at top.
+# Secondary production threshold: 0.1 mm. See comment block at top.
 # Effective threshold in TPC gas is set to 1 keV by SetSpecialPhysicsCuts override.
 /mcPhysics/rangeCuts 0.0001 mm
 /mcRegions/setRangePrecision 5
@@ -77,10 +77,10 @@
 /process/em/deexcitationIgnoreCut true
 
 # Step function for electrons and positrons
-# dRoverR=1.0 means up to 100% energy loss per step; finalRange=1mm sets the
-# minimum step length. Electron deposits most of its energy in ~1-2 steps,
-# giving a compact, high-ADC cluster that the KrBoxClusterFinder can identify.
-/process/eLoss/StepFunction 1.0 1 mm
+# dRoverR=0.2 limits each step to 20% energy loss; finalRange=0.1mm enforces fine
+# steps in the last 0.1mm of range. Produces many more steps per track (~307 MB
+# hits vs 188 MB for 1.0/1mm) — key driver of improved energy resolution.
+/process/eLoss/StepFunction 0.2 0.1 mm
 
 # Combined transportation + MSc mode is broken for ALICE (Geant 10.2.0+)
 # IMPORTANT: this command was previously being SKIPPED due to the optical

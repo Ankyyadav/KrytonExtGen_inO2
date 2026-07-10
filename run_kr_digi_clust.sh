@@ -47,13 +47,14 @@ DIGI_ONLY=0
 CLUST_ONLY=0
 TPC_LANES=4
 INI_FILE="krBoxCluster.largeBox.cuts.krMap.ini"
-SHM_SIZE=$(( 8 << 30 ))  # 8 GB
+SHM_SIZE=$(( 4 << 30 ))  # 4 GB — /dev/shm on this system is 7.7 GB; 8 GB was over limit
 O2_PPM=3
 DIGI_MODE="ZeroSuppressionCMCorr"   # Option A: change to ZeroSuppression
 CHUNK_EVENTS=0                       # Option B: 0 = no chunking
 KEEP_CHUNKS=0
 TRIGGERED=1                          # 1 = --TPCtriggered (default), 0 = continuous mode
 INTERACTION_RATE=50000               # Hz; used only when TRIGGERED=0
+EXTRA_KV=""                          # extra configKeyValues appended to DIGI_CONFIGKV
 
 # ── Argument parsing ───────────────────────────────────────────────────────────
 while [[ $# -gt 0 ]]; do
@@ -68,6 +69,8 @@ while [[ $# -gt 0 ]]; do
     --keep-chunks)      KEEP_CHUNKS=1;          shift ;;
     --no-triggered)     TRIGGERED=0;            shift ;;
     --interaction-rate) INTERACTION_RATE="$2";  shift 2 ;;
+    --extra-kv)         EXTRA_KV="$2";          shift 2 ;;
+    --shm-size)         SHM_SIZE="$2";          shift 2 ;;
     -h|--help)
       echo "Usage: $0 [--digi-only] [--clust-only] [--lanes N] [--o2ppm PPM]"
       echo "          [--digi-mode MODE] [--chunk-events N] [--keep-chunks]"
@@ -86,6 +89,7 @@ O2_FRAC=$(awk "BEGIN { printf \"%.2e\", ${O2_PPM} * 1e-6 }")
 
 # Common configKeyValues — shared by all digitizer invocations
 DIGI_CONFIGKV="TPCEleParam.ADCdynamicRange=700;TPCEleParam.ADCsaturation=8192;TPCEleParam.ChipGain=1;TPCEleParam.applyDeadMap=false;TPCEleParam.doCommonModePerPad=false;TPCEleParam.DigiMode=${DIGI_MODE};TPCDetParam.ExcludeFCGap=false;TPCDetParam.DriftTimeOffset=0;TPCGasParam.OxygenCont=${O2_FRAC}"
+[[ -n "$EXTRA_KV" ]] && DIGI_CONFIGKV="${DIGI_CONFIGKV};${EXTRA_KV}"
 
 # ── Checks ─────────────────────────────────────────────────────────────────────
 check_file() {
@@ -148,43 +152,42 @@ _run_digi_here() {
     $rate_flag \
     --tpc-lanes "$TPC_LANES" \
     --configKeyValues "$DIGI_CONFIGKV" \
+    --shm-segment-size $SHM_SIZE \
     -b \
-    -- --shm-segment-size $SHM_SIZE \
     &> log.digi &
   local pid=$!
 
-  local last_ms=0 start
+  # "TPC: Event time" fires once per TF per lane (including zero-digit TFs that
+  # "Flushed [^0]" would miss). Dividing by TPC_LANES gives true TF count.
+  # TF count is NOT comparable to sim-event count: in triggered mode, 1000 sim
+  # events with 1000 decays/event produce ~5x more TFs than sim events.
+  local last_tf=0 start
   start=$(date +%s)
   while kill -0 "$pid" 2>/dev/null; do
     sleep 15
-    local cnt ms elapsed
-    cnt=$(grep -c "TPC: Flushed [^0]" log.digi 2>/dev/null || true)
-    cnt=${cnt:-0}
-    # "TPC: Flushed" fires multiple times per TF (once per lane/sector group);
-    # divide by TPC_LANES to approximate TF count.
-    local cnt_tf=$(( TPC_LANES > 0 ? cnt / TPC_LANES : cnt ))
-    local interval=50
-    ms=$(( (cnt_tf / interval) * interval ))
+    local cnt_tf elapsed rate_str
+    cnt_tf=$(grep -c "TPC: Event time" log.digi 2>/dev/null || true)
+    cnt_tf=$(( TPC_LANES > 0 ? ${cnt_tf:-0} / TPC_LANES : ${cnt_tf:-0} ))
     elapsed=$(( $(date +%s) - start ))
-    if (( ms > last_ms )); then
-      if (( nevents_hint > 0 )); then
-        printf "[DIGI]%s %ds | ~%d/%d TFs\n" \
-          "${label:+ $label}" $elapsed $cnt_tf $nevents_hint
+    if (( cnt_tf > last_tf )); then
+      if (( elapsed > 0 )); then
+        rate_str=$(awk "BEGIN{printf \"%.1f\", ${cnt_tf}/${elapsed}}")
       else
-        printf "[DIGI]%s %ds | ~%d TFs\n" \
-          "${label:+ $label}" $elapsed $cnt_tf
+        rate_str="?"
       fi
-      last_ms=$ms
+      printf "[DIGI]%s %ds | %d TFs  (%s TF/s)\n" \
+        "${label:+ $label}" $elapsed $cnt_tf "$rate_str"
+      last_tf=$cnt_tf
     fi
   done
   wait "$pid"
   local rc=$?
 
-  local elapsed final_cnt
+  local elapsed final_tf
   elapsed=$(( $(date +%s) - start ))
-  final_cnt=$(grep -c "TPC: Flushed [^0]" log.digi 2>/dev/null || true)
-  local final_tf=$(( TPC_LANES > 0 ? ${final_cnt:-0} / TPC_LANES : ${final_cnt:-0} ))
-  printf "[DIGI]%s Finished in %ds | ~%d TFs digitized (exit=%d)\n" \
+  final_tf=$(grep -c "TPC: Event time" log.digi 2>/dev/null || true)
+  final_tf=$(( TPC_LANES > 0 ? ${final_tf:-0} / TPC_LANES : ${final_tf:-0} ))
+  printf "[DIGI]%s Finished in %ds | %d TFs digitized (exit=%d)\n" \
     "${label:+ $label}" $elapsed "${final_tf}" $rc
   return $rc
 }
@@ -192,6 +195,8 @@ _run_digi_here() {
 # ── Step 1: Digitizer ──────────────────────────────────────────────────────────
 if [[ $CLUST_ONLY -eq 0 ]]; then
   echo ""
+  echo "[DIGI] Cleaning up stale FairMQ SHM segments..."
+  find /dev/shm -maxdepth 1 -name 'fmq_*' -user "$(id -un)" -delete 2>/dev/null && true
   echo "[DIGI] Starting digitizer..."
 
   NEVENTS=$(root -b -q -l o2sim_Kine.root \

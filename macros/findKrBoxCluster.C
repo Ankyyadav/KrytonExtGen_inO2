@@ -15,7 +15,7 @@
 #include "TSystem.h"
 //#endif
 
-void findKrBoxCluster(std::string inputFile = "tpcdigits.root", std::string outputFile = "BoxClusters.root", std::string_view gainMapFile = "../GainMap_2021-11-17_krypton_0.5T.root", long long maxEvents = -1, int lastTimeBin = 70000, int maxClusterSizeTime = 3)
+void findKrBoxCluster(std::string inputFile = "tpcdigits.root", std::string outputFile = "BoxClusters.root", std::string_view gainMapFile = "../root/GainMap_2021-11-17_krypton_0.5T.root", long long maxEvents = -1, int lastTimeBin = 70000, int maxClusterSizeTime = 3)
 {
   ULong_t runRead = -1;
   uint32_t run = 0;

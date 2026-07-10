@@ -20,10 +20,18 @@ set -o pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BATCH_DIR="kr_batches"
+O2_PPM=3
+DIGI_MODE="ZeroSuppressionCMCorr"
+EXTRA_KV=""
+SHM_SIZE=$(( 4 << 30 ))
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --batch-dir)  BATCH_DIR="$2";  shift 2 ;;
+    --batch-dir)        BATCH_DIR="$2";   shift 2 ;;
+    --o2ppm)            O2_PPM="$2";      shift 2 ;;
+    --digi-mode)        DIGI_MODE="$2";   shift 2 ;;
+    --extra-kv)         EXTRA_KV="$2";    shift 2 ;;
+    --shm-size)         SHM_SIZE="$2";    shift 2 ;;
     -h|--help)
       sed -n '2,/^set -o/p' "$0" | grep '^#' | sed 's/^# \?//'; exit 0 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
@@ -48,6 +56,8 @@ echo "  83mKr batch digitizer"
 echo "================================================="
 echo "  Batches     : ${N}"
 echo "  Batch dir   : ${BATCH_DIR}/"
+echo "  O2 content  : ${O2_PPM} ppm"
+echo "  DigiMode    : ${DIGI_MODE}"
 echo "================================================="
 
 # ── Process each batch ─────────────────────────────────────────────────────────
@@ -65,7 +75,9 @@ for (( i=0; i<N; i++ )); do
 
   # All o2sim_* files are already in BDIR from the simulation step — just run.
   pushd "$BDIR" > /dev/null
-  "${SCRIPT_DIR}/run_kr_digi_clust.sh" --digi-only
+  DIGI_ARGS=(--digi-only --o2ppm "$O2_PPM" --digi-mode "$DIGI_MODE" --shm-size "$SHM_SIZE")
+  [[ -n "$EXTRA_KV" ]] && DIGI_ARGS+=(--extra-kv "$EXTRA_KV")
+  "${SCRIPT_DIR}/run_kr_digi_clust.sh" "${DIGI_ARGS[@]}"
   DIGI_EXIT=$?
   popd > /dev/null
 

@@ -21,6 +21,9 @@ EVENTS_PER_BATCH=25000
 N_BATCHES=40
 BATCH_DIR="kr_batches"
 N_PER_EVENT=1000
+ECUT_GEV=0.000001          # 1 keV default (CUTELE and CUTGAM)
+PHYSLIST="FTFP_BERT_LIV"   # Geant4 physics list (Livermore EM — best for keV-scale Kr)
+FIELD_KGAUSS=0             # magnetic field in kGauss (0=no field, 5=nominal ALICE 0.5T)
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -28,6 +31,9 @@ while [[ $# -gt 0 ]]; do
     -b|--batches)   N_BATCHES="$2";        shift 2 ;;
     --batch-dir)    BATCH_DIR="$2";        shift 2 ;;
     --nPerEvent)    N_PER_EVENT="$2";      shift 2 ;;
+    --ecut)         ECUT_GEV="$2";         shift 2 ;;
+    --physlist)     PHYSLIST="$2";         shift 2 ;;
+    --field)        FIELD_KGAUSS="$2";     shift 2 ;;
     -h|--help)
       sed -n '2,/^set -o/p' "$0" | grep '^#' | sed 's/^# \?//'; exit 0 ;;
     *) echo "Unknown option: $1"; exit 1 ;;
@@ -53,7 +59,7 @@ GENERATOR_PATH="/tmp/GeneratorKrDecay_loader.C"
 cp "$LOADER_SRC" "$GENERATOR_PATH"
 
 export KR_N_PER_EVENT="${N_PER_EVENT}"
-CV="GeneratorExternal.fileName=${GENERATOR_PATH};GeneratorExternal.funcName=GeneratorKrDecay();align-geom.mDetectors=none;G4.physicsmode=kUSER;G4.userPhysicsList=FTFP_BERT_PEN;G4.configMacroFile=${SCRIPT_DIR}/kr_g4config.in;GlobalSimProcs.CUTELE=0.000001;GlobalSimProcs.CUTGAM=0.000001;TPCDetParam.UseGeant4Edep=1;GenTPCLoopers.loopersVeto=true"
+CV="GeneratorExternal.fileName=${GENERATOR_PATH};GeneratorExternal.funcName=GeneratorKrDecay();align-geom.mDetectors=none;G4.physicsmode=kUSER;G4.userPhysicsList=${PHYSLIST};G4.configMacroFile=${SCRIPT_DIR}/kr_g4config.in;GlobalSimProcs.CUTELE=${ECUT_GEV};GlobalSimProcs.CUTGAM=${ECUT_GEV};TPCDetParam.UseGeant4Edep=1;GenTPCLoopers.loopersVeto=true"
 
 mkdir -p "$BATCH_DIR"
 
@@ -63,6 +69,10 @@ echo "========================================="
 echo "  Batches        : ${N_BATCHES}"
 echo "  Events / batch : ${EVENTS_PER_BATCH}"
 echo "  Total events   : ${TOTAL_EVENTS}"
+echo "  Kr/event       : ${N_PER_EVENT}"
+echo "  Physics list   : ${PHYSLIST}"
+echo "  Field          : ${FIELD_KGAUSS} kGauss"
+echo "  eCut           : ${ECUT_GEV} GeV"
 echo "  Batch dir      : ${BATCH_DIR}/"
 echo "========================================="
 
@@ -104,7 +114,7 @@ for (( i=1; i<=N_BATCHES; i++ )); do
   o2-sim -g external -e TGeant4 \
     -n "$EVENTS_PER_BATCH" \
     -m TPC \
-    --field 0 \
+    --field "${FIELD_KGAUSS}" \
     --nworkers 1 \
     --CCDBUrl http://alice-ccdb.cern.ch \
     --configKeyValues "$CV" \
