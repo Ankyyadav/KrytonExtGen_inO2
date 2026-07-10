@@ -23,7 +23,7 @@ BATCH_DIR="kr_batches"
 O2_PPM=3
 DIGI_MODE="ZeroSuppressionCMCorr"
 EXTRA_KV=""
-SHM_SIZE=$(( 4 << 30 ))
+SHM_SIZE=$(( 12 << 30 )) # 12 GB default; DPL uses up to the system /dev/shm limit
 
 while [[ $# -gt 0 ]]; do
   case "$1" in

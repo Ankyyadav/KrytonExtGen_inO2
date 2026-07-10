@@ -47,7 +47,7 @@ DIGI_ONLY=0
 CLUST_ONLY=0
 TPC_LANES=4
 INI_FILE="krBoxCluster.largeBox.cuts.krMap.ini"
-SHM_SIZE=$(( 4 << 30 ))  # 4 GB — /dev/shm on this system is 7.7 GB; 8 GB was over limit
+SHM_SIZE=$(( 12 << 30 )) # 12 GB default; DPL uses up to the system /dev/shm limit
 O2_PPM=3
 DIGI_MODE="ZeroSuppressionCMCorr"   # Option A: change to ZeroSuppression
 CHUNK_EVENTS=0                       # Option B: 0 = no chunking
