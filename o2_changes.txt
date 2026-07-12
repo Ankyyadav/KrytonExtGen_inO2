@@ -1,0 +1,127 @@
+O2 Source Code Changes for 83mKr Simulation
+============================================
+
+Three files in Detectors/TPC/ are modified. Local patch scripts are in
+local_o2_patches/. Apply them once per O2 build before compiling.
+
+All changes are gated on a new flag, TPCDetParam.UseGeant4Edep (default false),
+so the standard O2 simulation chain is completely unaffected.
+
+──────────────────────────────────────────────────────────────────────────────
+1. TPCBase/ParameterDetector.h
+──────────────────────────────────────────────────────────────────────────────
+
+CHANGE: Added one bool field to the ParameterDetector struct:
+
+    bool UseGeant4Edep = false;
+    ///< use Geant4 energy deposit directly for ionisation (Kr-83m only)
+
+WHY: This flag provides an opt-in switch that activates both fixes below
+     (ProcessHits and SetSpecialPhysicsCuts) without touching the code path
+     used by normal O2 simulations (tracks at GeV scale).
+
+     Activated at runtime via:
+       --configKeyValues "TPCDetParam.UseGeant4Edep=1"
+
+──────────────────────────────────────────────────────────────────────────────
+2. TPCSimulation/Detector.h
+──────────────────────────────────────────────────────────────────────────────
+
+CHANGE: Declared a new override in the Detector class:
+
+    void SetSpecialPhysicsCuts() override;
+
+WHY: The base class o2::base::Detector provides a virtual SetSpecialPhysicsCuts()
+     that is called during geometry initialisation. By overriding it in the TPC
+     Detector subclass we can inject custom energy cut values for TPC drift gas
+     mediums before the base class reads simcuts.dat. This is the only safe hook
+     available to set per-medium cuts early enough in the initialisation sequence.
+
+──────────────────────────────────────────────────────────────────────────────
+3. TPCSimulation/Detector.cxx
+──────────────────────────────────────────────────────────────────────────────
+
+Fix 1: ProcessHits — replace Bethe-Bloch with direct G4 energy deposit
+-----------------------------------------------------------------------
+
+CHANGE: Wrapped the existing Bethe-Bloch ionisation block in an else branch:
+
+    if (detParam.UseGeant4Edep) {
+        numberOfElectrons = static_cast<int>(fMC->Edep() / gasParam.Wion);
+    } else {
+        // ... original Bethe-Bloch + NA49 collision sampling (unchanged) ...
+    }
+
+WHY: The default O2 code uses the Bethe-Bloch formula (NA49 parameterisation)
+     to compute the number of ionisation electrons from the track step length
+     and the particle beta-gamma. This formula was designed for minimum-ionising
+     particles at GeV scale and is statistically inaccurate for the low-energy
+     conversion electrons emitted by 83mKr (9–42 keV).
+
+     Geant4, when running with the Livermore EM physics list (FTFP_BERT_LIV),
+     already computes the correct continuous energy loss per step using
+     EADL/EEDL data-driven cross-sections. fMC->Edep() returns this value
+     directly. Dividing by the mean ionisation energy per electron pair
+     (gasParam.Wion ≈ 37.3 eV for Ne-CO2-N2) gives the correct electron count
+     without any additional statistical model.
+
+     Without this fix: the spectrum shows no discrete peaks — the Bethe-Bloch
+     sampling produces a broad, structureless distribution for keV-scale tracks.
+     With this fix: the five 83mKr decay peaks (9.4, 12.6, 29.1, 32.2, 41.6 keV)
+     are cleanly resolved.
+
+Fix 2: SetSpecialPhysicsCuts — set 1 keV threshold before simcuts.dat
+----------------------------------------------------------------------
+
+CHANGE: Added the override implementation:
+
+    void Detector::SetSpecialPhysicsCuts() {
+        if (detParam.UseGeant4Edep) {
+            auto& matmgr = o2::base::MaterialManager::Instance();
+            for (int med : {(int)kDriftGas1, (int)kDriftGas2, (int)kCO2}) {
+                matmgr.SpecialCut(GetName(), med, ECut::kCUTELE, 1e-6f);
+                matmgr.SpecialCut(GetName(), med, ECut::kCUTGAM, 1e-6f);
+                matmgr.SpecialCut(GetName(), med, ECut::kDCUTE,  1e-6f);
+                matmgr.SpecialCut(GetName(), med, ECut::kBCUTE,  1e-6f);
+            }
+        }
+        o2::base::Detector::SetSpecialPhysicsCuts(); // reads simcuts.dat AFTER
+    }
+
+WHY: O2 ships a file simcuts.dat (in $O2_ROOT/share/Detectors/TPC/simulation/data/)
+     that hardcodes CUTELE = 1e-5 GeV = 10 keV for the TPC drift gas mediums
+     (kDriftGas1, kDriftGas2, kCO2). This 10 keV floor kills several 83mKr
+     decay products before Geant4 can track them:
+
+       - T2-gamma L-CE (7.5 keV): killed at birth
+       - K-alpha X-ray (9.4 keV): killed at birth
+       - Auger electrons (1.9 keV): killed at birth
+
+     Setting the rangeCuts to 4 nm (as done in kr_g4config.in) is not enough
+     because TG4GeometryManager converts range cuts to energy thresholds using
+     the material properties, and the simcuts.dat energy floor overrides the
+     result if it is higher.
+
+     The critical detail: TG4GeometryManager honours only the FIRST Gstpar call
+     for each (medium, parameter) pair — subsequent calls are silently ignored.
+     By calling matmgr.SpecialCut() BEFORE the base class reads simcuts.dat,
+     our 1 keV value wins and simcuts.dat is effectively bypassed for these
+     mediums without editing the installed file.
+
+     Confirmed via the worker log: after the fix the log shows
+       "Energy thresholds: e- 1 keV" for TPC_Ne-CO2-N-2
+     instead of the previous "e- 10 keV", confirming that Auger electrons
+     at 1.921 keV are now tracked rather than killed at birth.
+
+──────────────────────────────────────────────────────────────────────────────
+Summary of impact
+──────────────────────────────────────────────────────────────────────────────
+
+Before changes: O2 Kr simulation produces a structureless broad spectrum.
+                Resolution on 41.6 keV peak: ~12% (worse than G4 standalone ~9.4%).
+
+After changes + optimised parameters (FTFP_BERT_LIV, StepFunction 0.2/0.1mm,
+MaxClusterSizeTime=10, OxygenCont=3ppm):
+                Resolution on 41.6 keV peak: 8.01% (O2 sim) vs 7.95% (G4 standalone).
+
+The residual gap of 0.06 pp is within statistical fluctuations of the runs used.

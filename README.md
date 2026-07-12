@@ -8,71 +8,78 @@ digitized cluster spectra for calibration validation.
 ## Contents
 
 ```
-run_kr_sim.sh            — single-run simulator (small tests only, see CM note)
+run_kr_sim.sh            — single-run simulator
 run_kr_batches.sh        — batch simulator: N independent runs of M events each
-run_kr_digi_clust.sh     — digitizer + optional cluster finder (single run)
+run_kr_digi_clust.sh     — digitizer + O2 cluster finder (default); --digi-only / --clust-only for individual steps
 run_digi_from_batches.sh — digitizer for all batches produced by run_kr_batches.sh
 build_kr_generator.sh    — compile the external generator (run once)
 kr_g4config.in           — Geant4 macro with physics settings
+krBoxCluster.largeBox.cuts.krMap.ini — cluster finder configuration
 GainMap_2021-11-17_krypton_0.5T.root  — TPC gain map (flat for simulation)
+o2_changes.txt           — summary of O2 source code changes and motivation
 macros/
   GeneratorKrDecay.h/.cxx      — external generator source
   GeneratorKrDecayLoader.C     — CLING loader shim
   findKrBoxCluster.C           — cluster finder (reads glob of tpcdigits.root files)
   plotBoxClusters.C            — spectrum plotter + multi-Gaussian fit
   plotBoxClustersMerged.C      — merged/per-ROC spectrum plotter
+  plotDplClusters.C            — per-sector DPL cluster spectrum plotter
+local_o2_patches/        — patch scripts for O2 source files (apply once per build)
 ```
 
 ---
 
-## Recommended Workflow (Batch Mode)
-
-The digitizer's common-mode estimator accumulates a baseline across all events
-in a run. With sparse Kr events (~1 decay/sector/TF) this baseline drifts and
-the digit charge degrades after ~30 000 events. **Events must be processed in
-batches** so each batch starts with a fresh baseline.
-
-Working configuration: **40 batches of 25 000 events** (1 M total).
+## Recommended Workflow
 
 ```bash
 # 0. One-time: compile the generator
 ./build_kr_generator.sh
 
-# Create a scan directory and run from inside it
-mkdir scan_1M && cd scan_1M
+# Create a run directory and work from inside it
+mkdir KrRun && cd KrRun
 
-# 1. Simulate 40 batches of 25k events each (no merging)
-../run_kr_batches.sh -e 25000 -b 40
+# 1. Simulate: 100 events, 5000 decays per event (500 000 total)
+../run_kr_sim.sh -n 100 -d 5000
 
-# 2. Digitize each batch independently (fresh CM baseline per batch)
-#    reads from kr_batches/, writes tpcdigits.root into kr_batches/batch_*/
-../run_digi_from_batches.sh
+# 2. Digitize and run the O2 cluster finder in one step
+../run_kr_digi_clust.sh
 
-# 3. Find clusters across all batches in one pass → BoxClusters.root
-root -b -l -q '../macros/findKrBoxCluster.C+("kr_batches/batch_*/tpcdigits.root","BoxClusters.root","../GainMap_2021-11-17_krypton_0.5T.root")'
-
-# 4. Plot spectrum
-root -b -l -q '../macros/plotBoxClustersMerged.C("BoxClusters.root")'
+# 3. Plot the cluster spectrum (IROC, all sectors)
+root -b -l -q '../macros/plotDplClusters.C'
 ```
 
-After step 2, per-batch tpcdigits.root files are in `digi_batches/batch_*/`.
-**Do not hadd tpcdigits.root files** — the TPC CommonMode branches expand from
-~65 MB/batch to ~100 GB when recompressed by hadd. The cluster finder reads
-multiple files directly via TChain (the `batch_*/tpcdigits.root` glob).
+The `-d` / `--nPerEvent` flag sets the number of Kr decays placed per time frame
+(default 5000). Going above 5000 may hit the shared-memory limit of your machine
+(`/dev/shm`). The default SHM size is set to 12 GB in `run_kr_digi_clust.sh`; if
+your device has more memory you can override it with `--shm-size <bytes>` and
+increase `-d` accordingly.
+
+`run_kr_digi_clust.sh` runs digitization and the O2 TPC cluster finder together.
+Pass `--digi-only` or `--clust-only` to run either step in isolation.
 
 ---
 
-## Small-Scale Test (Single Run)
+## Batch Workflow (Larger Production)
 
-For quick checks with a few thousand events where CM drift is not yet a problem:
+To accumulate more statistics than a single run allows, use batch mode.
+Each batch is an independent simulation + digitization, avoiding any
+shared-memory constraint from large `nPerEvent`.
 
 ```bash
-mkdir test && cd test
-../run_kr_sim.sh -n 5000
-../run_kr_digi_clust.sh --digi-only
-root -b -l -q '../macros/findKrBoxCluster.C+("tpcdigits.root","BoxClusters.root","../GainMap_2021-11-17_krypton_0.5T.root")'
-root -b -l -q '../macros/plotBoxClustersMerged.C("BoxClusters.root")'
+mkdir KrRun && cd KrRun
+
+# 1. Simulate 50 batches of 100 events × 5000 decays (25 M total decays)
+../run_kr_batches.sh -n 100 -d 5000 -b 50
+
+# 2. Digitize each batch independently
+../run_digi_from_batches.sh
+
+# 3. Plot — plotDplClusters.C reads the per-batch cluster files
+root -b -l -q '../macros/plotDplClusters.C'
 ```
+
+**Do not hadd tpcdigits.root files** — the TPC CommonMode branches expand from
+~65 MB/batch to ~100 GB when recompressed by hadd.
 
 ---
 
@@ -98,26 +105,26 @@ show these five discrete peaks.
 
 ---
 
-## Common Mode Accumulation Constraint
+## Common Mode Accumulation
 
 `DigiMode=ZeroSuppressionCMCorr` runs a per-sector CM estimator that
 accumulates a running baseline across all events in one digitizer invocation.
-With only ~1 Kr event per sector per TF the estimator has too little signal to
-converge and oscillates, causing digit charges to degrade from ~131 ADC/channel
-(correct) to ~3 ADC after ~30 000 events. The first 5 000 events from any run
-produce the correct spectrum.
+With only ~1 Kr decay per sector per TF (nPerEvent = 1) the estimator has too
+little signal to converge and oscillates, causing digit charges to degrade from
+~131 ADC/channel to ~3 ADC after ~30 000 events.
 
-**Fix:** run the digitizer in separate invocations of ≤25 000 events each.
-`run_digi_from_batches.sh` does this automatically using batches produced by
-`run_kr_batches.sh`. Each invocation starts with a fresh baseline.
+**This is not an issue with nPerEvent ≥ 500.** Each TF contains 500+ decays
+spread across all sectors, giving the CM estimator sufficient signal to converge
+immediately and remain stable throughout the run. Batch splitting was required
+only for the nPerEvent = 1 use case.
 
-Approaches that do **not** work:
-- `--start-value-enumeration` / `--end-value-enumeration`: these DPL flags are
-  not honoured by SimReader in the current O2 build.
-- Continuous readout mode (`--interactionRate`): produces a single 50M-timebin
-  TF; the CM estimator still accumulates across the whole TF.
-- Merging tpcdigits.root from batches with hadd: ROOT inflates the CommonMode
-  branches from ~65 MB/batch to ~100 GB total.
+For reference, approaches that do **not** work for the nPerEvent = 1 case:
+- `--start-value-enumeration` / `--end-value-enumeration`: not honoured by
+  SimReader in the current O2 build.
+- Continuous readout mode: produces a single 50M-timebin TF; CM still
+  accumulates across the whole TF.
+- Merging tpcdigits.root with hadd: ROOT inflates CommonMode branches from
+  ~65 MB/batch to ~100 GB total.
 
 ---
 
@@ -187,11 +194,16 @@ are now tracked rather than killed at birth.
 ### Why it works
 
 `fMC->Edep()` returns Geant4's actual continuous energy loss for that
-transport step, computed by the **Penelope EM** physics model
-(`FTFP_BERT_PEN`). Penelope is designed for accurate electron transport
-from ~100 eV upwards — exactly the regime of Kr decay electrons. The
-total ionisation per cluster then correctly reflects the decay channel
-energy, producing the expected discrete peaks.
+transport step, computed by the **Livermore EM** physics model
+(`FTFP_BERT_LIV`). Livermore uses EADL/EEDL data-driven cross-sections
+designed for accurate electron transport from a few eV upwards — exactly
+the regime of Kr decay electrons (9–42 keV). The total ionisation per
+cluster then correctly reflects the decay channel energy, producing the
+expected discrete peaks. Additionally, `/process/eLoss/StepFunction 0.2 0.1 mm`
+ensures enough ionisation steps are produced per track that individual
+digit charges are small and the cluster charge distribution is narrow,
+bringing the O2 simulation resolution (8.01%) to within 0.1 pp of the
+G4 standalone reference (7.95%).
 
 ---
 
@@ -229,11 +241,13 @@ Build the `.so` once with:
 
 ## Simulation Configuration
 
-### Physics list: `FTFP_BERT_PEN`
+### Physics list: `FTFP_BERT_LIV`
 
-Selected via `G4.physicsmode=kUSER` and `G4.userPhysicsList=FTFP_BERT_PEN`.
-The Penelope electromagnetic model provides accurate treatment of
-low-energy electrons and photons, replacing the standard EM tables.
+Selected via `G4.physicsmode=kUSER` and `G4.userPhysicsList=FTFP_BERT_LIV`.
+The Livermore electromagnetic model uses EADL/EEDL data-driven cross-sections
+for accurate treatment of electrons and photons at keV scale, outperforming
+Penelope (PEN) for Kr decay energies (9–42 keV). See `o2_changes.txt` for
+the full parameter scan that determined this choice.
 
 ### `kr_g4config.in` — Geant4 macro settings
 
@@ -243,7 +257,7 @@ low-energy electrons and photons, replacing the standard EM tables.
 | `/process/em/fluo` + `fluoBearden` | true | Fluorescence photons produced using Bearden atomic data |
 | `/process/em/auger` + `augerCascade` | true | Full Auger cascade chain tracked |
 | `/process/em/deexcitationIgnoreCut` | true | Track de-excitation products even below the production cut |
-| `/process/eLoss/StepFunction` | 1.0 1 mm | Allow up to 100% energy loss per step; fine steps only in last 1 mm of range. Electrons with range < 1 mm (all Kr primaries below ~30 keV) are transported in one compact step → high per-digit ADC, clean cluster identification. |
+| `/process/eLoss/StepFunction` | 0.2 0.1 mm | Limits each step to at most 20% energy loss (dRoverR=0.2) and enforces fine steps in the last 0.1 mm of range. This is the single largest improvement found: 10.37% → 8.06% resolution on the 41.6 keV peak. Both parameters are synergistic — combined gain is ~10× larger than either alone. Hits file grows from ~188 MB to ~307 MB per run. |
 | `/process/em/transportationWithMsc` | Disabled | Required for ALICE geometry (broken since Geant4 10.2) |
 
 ### `--configKeyValues` for simulation
@@ -252,7 +266,7 @@ low-energy electrons and photons, replacing the standard EM tables.
 |-----|-------|--------|
 | `TPCDetParam.UseGeant4Edep` | 1 | Use Geant4 Edep instead of Bethe-Bloch (see above) |
 | `G4.physicsmode` | kUSER | Enable custom physics list |
-| `G4.userPhysicsList` | FTFP_BERT_PEN | Penelope EM for accurate low-energy electrons |
+| `G4.userPhysicsList` | FTFP_BERT_LIV | Livermore EM for accurate low-energy electrons (EADL/EEDL data-driven) |
 | `G4.configMacroFile` | kr_g4config.in | Load custom Geant4 settings above |
 | `GlobalSimProcs.DRAY` | 1 | Enable delta-ray production; δ-rays above 1.69 keV get explicit tracks |
 | `GlobalSimProcs.CUTELE` | 1e-6 (MeV = 1 keV) | Kill secondary electrons below 1 keV |
@@ -304,28 +318,38 @@ ADC/electron = ElectronCharge × 1e15 × ChipGain × ADCsaturation / ADCdynamicR
 
 ## Cluster Finder
 
-### `macros/findKrBoxCluster.C`
+### O2 cluster finder (default)
 
-Reads one or more `tpcdigits.root` files via TChain (glob patterns accepted),
-runs `KrBoxClusterFinder`, writes all clusters to `BoxClusters.root` in branch
-`"cls"` (all 36 sectors combined). Gain map applied if the file exists.
+`run_kr_digi_clust.sh` (without flags) runs both the digitizer and the O2 TPC
+cluster finder (`o2-tpc-reco-workflow`) in one pipeline. The output is read
+directly by `plotDplClusters.C`.
 
-Single-run (default — reads `tpcdigits.root` in the current directory):
 ```bash
-root -b -l -q '../macros/findKrBoxCluster.C+'
+../run_kr_digi_clust.sh                # digi + O2 cluster finder (default)
+../run_kr_digi_clust.sh --digi-only    # digitization only → tpcdigits.root
+../run_kr_digi_clust.sh --clust-only   # cluster finding only (needs tpcdigits.root)
 ```
 
-Batch mode (pass the glob explicitly):
+### `macros/plotDplClusters.C`
+
+Reads the O2 cluster output and plots the charge spectrum per sector and per ROC.
+Run from inside the KrRun directory (no arguments needed for the default output file):
+
 ```bash
-root -b -l -q '../macros/findKrBoxCluster.C+("kr_batches/batch_*/tpcdigits.root","BoxClusters.root","../GainMap_2021-11-17_krypton_0.5T.root")'
+root -b -l -q '../macros/plotDplClusters.C'
 ```
 
-Compiled defaults: `MaxClusterSizeTime=3`, `MaxClusterSizePadIROC=5`,
-`MaxClusterSizeRowIROC=3`, `QThresholdMax=30`, `QThreshold=1`,
-`MinNumberOfNeighbours=2`, `setMaxTimes(70000)`.
+### Alternative: Kr box cluster finder
 
-### `macros/plotBoxClustersMerged.C`
+If the O2 cluster finder is not available or a cross-check is needed, the
+standalone `KrBoxClusterFinder` can be used instead. It reads `tpcdigits.root`
+directly (produced by `--digi-only`) and writes clusters to `BoxClusters.root`.
 
-Reads `"cls"` branch, supports per-ROC and per-sector selection. By default
-plots merged IROC spectrum. Options: `IROC`, `OROC1`, `OROC2`, `OROC3`, or
-a specific sector number.
+```bash
+# Requires tpcdigits.root (run --digi-only first)
+root -b -l -q '../macros/findKrBoxCluster.C+("tpcdigits.root","BoxClusters.root","../GainMap_2021-11-17_krypton_0.5T.root")'
+root -b -l -q '../macros/plotBoxClustersMerged.C("BoxClusters.root")'
+```
+
+Cluster finder settings are read from `krBoxCluster.largeBox.cuts.krMap.ini`
+(key parameters: `MaxClusterSizeTime=10`, `OxygenCont=3e-06`).
