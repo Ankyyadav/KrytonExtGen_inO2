@@ -83,6 +83,76 @@ root -b -l -q '../macros/plotDplClusters.C'
 
 ---
 
+## Bare Commands (no scripts)
+
+The same simulation chain expressed as direct O2 commands, with every flag
+spelled out. Useful for quick manual tests or when adapting the workflow.
+Run from inside a fresh directory (e.g. `mkdir KrRun && cd KrRun`).
+
+```bash
+# nPerEvent is passed to the generator via environment variable
+export KR_N_PER_EVENT=5000
+
+# Simulation — 100 events × 5000 decays
+o2-sim \
+  -m TPC \
+  -n 100 \
+  -g external \
+  --field 0 \
+  --nworkers 4 \
+  --configKeyValues \
+    "GeneratorExternal.fileName=/path/to/macros/GeneratorKrDecayLoader.C;\
+GeneratorExternal.funcName=GeneratorKrDecay();\
+align-geom.mDetectors=none;\
+G4.physicsmode=kUSER;\
+G4.userPhysicsList=FTFP_BERT_LIV;\
+G4.configMacroFile=/path/to/kr_g4config.in;\
+GlobalSimProcs.CUTELE=1e-6;\
+GlobalSimProcs.CUTGAM=1e-6;\
+TPCDetParam.UseGeant4Edep=1;\
+GenTPCLoopers.loopersVeto=true;\
+SimCutParams.stepFiltering=false" \
+  -o o2sim_kr \
+  &> log.sim
+
+# Digitization
+o2-sim-digitizer-workflow \
+  --TPCtriggered \
+  --shm-segment-size $(( 12 << 30 )) \
+  --configKeyValues \
+    "TPCEleParam.ADCdynamicRange=700;\
+TPCEleParam.ADCsaturation=8192;\
+TPCEleParam.ChipGain=1;\
+TPCEleParam.DigiMode=ZeroSuppressionCMCorr;\
+TPCEleParam.applyDeadMap=false;\
+TPCEleParam.doCommonModePerPad=false;\
+TPCDetParam.ExcludeFCGap=false;\
+TPCDetParam.DriftTimeOffset=0;\
+TPCGasParam.OxygenCont=3e-06" \
+  -b \
+  &> log.digi
+
+# Cluster finding (O2 TPC reco workflow)
+o2-tpc-reco-workflow \
+  -b \
+  --session default \
+  --shm-segment-size $(( 12 << 30 )) \
+  --input-type digitizer \
+  --output-type clusters,tracks \
+  --disable-mc \
+  --configKeyValues "align-geom.mDetectors=none" \
+  &> log.clust
+
+# Plot
+root -b -l -q '/path/to/macros/plotDplClusters.C'
+```
+
+`KR_N_PER_EVENT` is read by `GeneratorKrDecay` at startup via `std::getenv`.
+Going above 5000 may hit the `/dev/shm` limit; increase `--shm-segment-size`
+proportionally if your machine allows it.
+
+---
+
 ## Physics: 83mKr Decay Channels
 
 Kr-83m decays via internal transition emitting conversion electrons (CE)
